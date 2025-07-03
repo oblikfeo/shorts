@@ -8,8 +8,13 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Хранилище для активных SSE соединений
+const sseConnections = new Set();
+
+// Middleware для CORS
 app.use(cors());
 app.use(express.json());
+app.use(express.static(path.join(__dirname, '../client/build')));
 
 const DATA_DIR = path.join(__dirname, 'data');
 
@@ -21,8 +26,6 @@ async function ensureDataDirectory() {
     console.log('Папка data уже существует');
   }
 }
-
-
 
 // Загрузить все работы из всех файлов
 async function loadEssays() {
@@ -64,8 +67,6 @@ async function deleteEssayFile(id) {
     console.error(`Ошибка удаления файла essay_${id}.json:`, error);
   }
 }
-
-
 
 // Генерируем краткое содержание реферата через DeepSeek API
 async function generateEssaySummary(topic) {
@@ -134,6 +135,14 @@ app.post('/api/generate-essays', async (req, res) => {
       try {
         console.log(`Обрабатываю тему ${i + 1}/${topics.length}: ${topic}`);
         
+        // Отправляем прогресс
+        sendProgress({
+          type: 'progress',
+          current: i + 1,
+          total: topics.length,
+          topic: topic
+        });
+        
         const summary = await generateEssaySummary(topic);
         
         const essay = {
@@ -146,6 +155,14 @@ app.post('/api/generate-essays', async (req, res) => {
         // Сохраняем каждый реферат сразу в отдельный файл
         await saveEssay(essay);
         results.push(essay);
+        
+        // Отправляем информацию о завершенном реферате
+        sendProgress({
+          type: 'essay_completed',
+          current: i + 1,
+          total: topics.length,
+          essay: essay
+        });
         
         // Небольшая задержка между запросами
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -160,6 +177,15 @@ app.post('/api/generate-essays', async (req, res) => {
         };
         await saveEssay(errorEssay);
         results.push(errorEssay);
+        
+        // Отправляем информацию об ошибке
+        sendProgress({
+          type: 'essay_error',
+          current: i + 1,
+          total: topics.length,
+          topic: topic,
+          error: error.message
+        });
       }
     }
     
@@ -209,6 +235,35 @@ app.delete('/api/essays/:id', async (req, res) => {
     res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
+
+// SSE endpoint для отправки прогресса
+app.get('/api/progress', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Cache-Control'
+  });
+
+  // Отправляем начальное сообщение
+  res.write('data: {"type": "connected"}\n\n');
+
+  // Добавляем соединение в список
+  sseConnections.add(res);
+
+  // Удаляем соединение при закрытии
+  req.on('close', () => {
+    sseConnections.delete(res);
+  });
+});
+
+// Функция для отправки прогресса всем подключенным клиентам
+function sendProgress(data) {
+  sseConnections.forEach(client => {
+    client.write(`data: ${JSON.stringify(data)}\n\n`);
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`Сервер запущен на порту ${PORT}`);

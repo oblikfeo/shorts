@@ -49,19 +49,54 @@ function App() {
     setError('');
     setProgress({ current: 0, total: topicsArray.length });
 
+    // Подключаемся к SSE для получения прогресса
+    const eventSource = new EventSource('/api/progress');
+    
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        
+        switch (data.type) {
+          case 'connected':
+            console.log('SSE соединение установлено');
+            break;
+          case 'progress':
+            setProgress({ current: data.current, total: data.total });
+            break;
+          case 'essay_completed':
+            setProgress({ current: data.current, total: data.total });
+            // Добавляем новый реферат в список
+            setEssays(prevEssays => [data.essay, ...prevEssays]);
+            break;
+          case 'essay_error':
+            setProgress({ current: data.current, total: data.total });
+            console.error(`Ошибка при обработке темы "${data.topic}":`, data.error);
+            break;
+        }
+      } catch (error) {
+        console.error('Ошибка парсинга SSE данных:', error);
+      }
+    };
+
+    eventSource.onerror = (error) => {
+      console.error('SSE ошибка:', error);
+      eventSource.close();
+    };
+
     try {
       await axios.post('/api/generate-essays', {
         topics: topicsArray
       });
 
-      // Обновляем список рефератов
-      await loadEssays();
+      // Закрываем SSE соединение
+      eventSource.close();
       
       setTopics('');
       setProgress({ current: 0, total: 0 });
     } catch (error) {
       console.error('Ошибка при генерации рефератов:', error);
       setError(error.response?.data?.error || 'Произошла ошибка при генерации рефератов');
+      eventSource.close();
     } finally {
       setLoading(false);
     }

@@ -127,8 +127,6 @@ app.post('/api/generate-essays', async (req, res) => {
     }
 
     await ensureDataDirectory();
-    const existingEssays = await loadEssays();
-    
     const results = [];
     const batchSize = 50; // Сохраняем по 50 рефератов в файл
     
@@ -148,11 +146,10 @@ app.post('/api/generate-essays', async (req, res) => {
         };
         
         results.push(essay);
-        existingEssays.push(essay);
         
         // Сохраняем каждые 50 рефератов
-        if (existingEssays.length % batchSize === 0) {
-          await saveEssaysChunked(existingEssays);
+        if (results.length % batchSize === 0) {
+          await saveEssaysChunked(results);
         }
         
         // Небольшая задержка между запросами
@@ -170,7 +167,7 @@ app.post('/api/generate-essays', async (req, res) => {
     }
     
     // Сохраняем оставшиеся рефераты
-    await saveEssaysChunked(existingEssays);
+    await saveEssaysChunked(results);
     
     res.json({
       success: true,
@@ -190,12 +187,10 @@ app.get('/api/essays', async (req, res) => {
     const { search } = req.query;
     let essays = await loadEssays();
     
-    // Поиск по теме
+    // Поиск только по теме
     if (search) {
       essays = essays.filter(essay => 
-        essay.topic.toLowerCase().includes(search.toLowerCase()) ||
-        essay.product.toLowerCase().includes(search.toLowerCase()) ||
-        essay.problem.toLowerCase().includes(search.toLowerCase())
+        essay.topic.toLowerCase().includes(search.toLowerCase())
       );
     }
     

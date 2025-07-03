@@ -22,64 +22,50 @@ async function ensureDataDirectory() {
   }
 }
 
-// Получить список файлов с работами
-async function getEssayFiles() {
+
+
+// Загрузить все работы из всех файлов
+async function loadEssays() {
   try {
     const files = await fs.readdir(DATA_DIR);
-    return files.filter(f => /^essays_\d+\.json$/.test(f)).sort((a, b) => {
-      const na = parseInt(a.match(/essays_(\d+)\.json/)[1]);
-      const nb = parseInt(b.match(/essays_(\d+)\.json/)[1]);
-      return na - nb;
-    });
-  } catch {
+    const essayFiles = files.filter(f => f.endsWith('.json'));
+    let all = [];
+    
+    for (const file of essayFiles) {
+      try {
+        const data = await fs.readFile(path.join(DATA_DIR, file), 'utf8');
+        const essay = JSON.parse(data);
+        all.push(essay);
+      } catch (error) {
+        console.error(`Ошибка чтения файла ${file}:`, error);
+      }
+    }
+    
+    return all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  } catch (error) {
+    console.error('Ошибка загрузки работ:', error);
     return [];
   }
 }
 
-// Загрузить все работы из всех файлов
-async function loadEssays() {
-  const files = await getEssayFiles();
-  let all = [];
-  for (const file of files) {
-    try {
-      const data = await fs.readFile(path.join(DATA_DIR, file), 'utf8');
-      all = all.concat(JSON.parse(data));
-    } catch {}
-  }
-  return all;
-}
-
-// Сохранить массив работ в файл с нужным номером
-async function saveEssaysToFile(essays, fileIndex) {
-  const fileName = `essays_${fileIndex}.json`;
-  await fs.writeFile(path.join(DATA_DIR, fileName), JSON.stringify(essays, null, 2));
-}
-
-// Сохранить новые работы по 20 в файл
-async function saveEssaysChunked(newEssays) {
+// Сохранить один реферат в отдельный файл
+async function saveEssay(essay) {
   await ensureDataDirectory();
-  const files = await getEssayFiles();
-  let all = await loadEssays();
-  all = all.concat(newEssays);
-  // Разбиваем на чанки по 20
-  for (let i = 0; i < all.length; i += 20) {
-    const chunk = all.slice(i, i + 20);
-    await saveEssaysToFile(chunk, Math.floor(i / 20) + 1);
+  const fileName = `essay_${essay.id}.json`;
+  await fs.writeFile(path.join(DATA_DIR, fileName), JSON.stringify(essay, null, 2));
+}
+
+// Удалить файл реферата
+async function deleteEssayFile(id) {
+  try {
+    const fileName = `essay_${id}.json`;
+    await fs.unlink(path.join(DATA_DIR, fileName));
+  } catch (error) {
+    console.error(`Ошибка удаления файла essay_${id}.json:`, error);
   }
 }
 
-// Сохранить только новые работы по 20 в файл (без загрузки старых)
-async function saveNewEssaysChunked(newEssays) {
-  await ensureDataDirectory();
-  const files = await getEssayFiles();
-  const nextFileIndex = files.length + 1;
-  
-  // Разбиваем новые работы на чанки по 20
-  for (let i = 0; i < newEssays.length; i += 20) {
-    const chunk = newEssays.slice(i, i + 20);
-    await saveEssaysToFile(chunk, nextFileIndex + Math.floor(i / 20));
-  }
-}
+
 
 // Генерируем краткое содержание реферата через DeepSeek API
 async function generateEssaySummary(topic) {
@@ -141,7 +127,6 @@ app.post('/api/generate-essays', async (req, res) => {
 
     await ensureDataDirectory();
     const results = [];
-    const batchSize = 50; // Сохраняем по 50 рефератов в файл
     
     for (let i = 0; i < topics.length; i++) {
       const topic = topics[i];
@@ -158,29 +143,25 @@ app.post('/api/generate-essays', async (req, res) => {
           createdAt: new Date().toISOString()
         };
         
+        // Сохраняем каждый реферат сразу в отдельный файл
+        await saveEssay(essay);
         results.push(essay);
-        
-        // Сохраняем каждые 50 рефератов
-        if (results.length % batchSize === 0) {
-          await saveNewEssaysChunked(results);
-        }
         
         // Небольшая задержка между запросами
         await new Promise(resolve => setTimeout(resolve, 1000));
         
       } catch (error) {
         console.error(`Ошибка при обработке темы "${topic}":`, error.message);
-        results.push({
+        const errorEssay = {
           id: Date.now() + i,
           topic: topic,
           error: error.message,
           createdAt: new Date().toISOString()
-        });
+        };
+        await saveEssay(errorEssay);
+        results.push(errorEssay);
       }
     }
-    
-    // Сохраняем оставшиеся рефераты
-    await saveNewEssaysChunked(results);
     
     res.json({
       success: true,
@@ -218,10 +199,9 @@ app.get('/api/essays', async (req, res) => {
 app.delete('/api/essays/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    let essays = await loadEssays();
     
-    essays = essays.filter(essay => essay.id !== parseInt(id));
-    await saveEssaysChunked(essays);
+    // Просто удаляем файл реферата
+    await deleteEssayFile(parseInt(id));
     
     res.json({ success: true });
   } catch (error) {

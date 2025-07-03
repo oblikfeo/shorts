@@ -49,12 +49,17 @@ function App() {
     setError('');
     setProgress({ current: 0, total: topicsArray.length });
 
-    // Подключаемся к SSE для получения прогресса
-    const eventSource = new EventSource('/api/progress');
+    // Абсолютный адрес для SSE (если фронт и бек на разных портах)
+    const eventSource = new EventSource('http://localhost:5000/api/progress');
+
+    eventSource.onopen = () => {
+      console.log('SSE соединение открыто');
+    };
     
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        console.log('SSE событие:', data);
         
         switch (data.type) {
           case 'connected':
@@ -65,13 +70,17 @@ function App() {
             break;
           case 'essay_completed':
             setProgress({ current: data.current, total: data.total });
-            // Добавляем новый реферат в список
             setEssays(prevEssays => [data.essay, ...prevEssays]);
             break;
           case 'essay_error':
             setProgress({ current: data.current, total: data.total });
             console.error(`Ошибка при обработке темы "${data.topic}":`, data.error);
             break;
+        }
+        // Закрываем SSE только когда всё завершено
+        if (data.current === data.total && data.total > 0) {
+          eventSource.close();
+          console.log('SSE соединение закрыто (все темы обработаны)');
         }
       } catch (error) {
         console.error('Ошибка парсинга SSE данных:', error);
@@ -87,9 +96,6 @@ function App() {
       await axios.post('/api/generate-essays', {
         topics: topicsArray
       });
-
-      // Закрываем SSE соединение
-      eventSource.close();
       
       setTopics('');
       setProgress({ current: 0, total: 0 });
@@ -123,7 +129,7 @@ function App() {
   };
 
   const filteredEssays = essays.filter(essay => 
-    essay.topic.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (essay.topic && essay.topic.toLowerCase().includes(searchTerm.toLowerCase())) ||
     (essay.summary && essay.summary.toLowerCase().includes(searchTerm.toLowerCase())) ||
     (essay.product && essay.product.toLowerCase().includes(searchTerm.toLowerCase())) ||
     (essay.problem && essay.problem.toLowerCase().includes(searchTerm.toLowerCase()))
